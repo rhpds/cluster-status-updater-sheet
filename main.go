@@ -31,6 +31,12 @@ type Cluster struct {
 	OCPVersion     string                    `json:"ocp_version"`
 	NodeSummary    NodeSummary               `json:"node_summary"`
 	OperatorStatus map[string]OperatorStatus `json:"operator_status"`
+	Configuration  struct {
+		APIURL      string `json:"api_url"`
+		Annotations struct {
+			Cloud string `json:"cloud"`
+		} `json:"annotations"`
+	} `json:"configuration"`
 }
 
 type NodeSummary struct {
@@ -73,7 +79,7 @@ func main() {
 	// 4. Transform data for Google Sheets
 	log.Println("Parsing and preparing data for Google Sheets...")
 	rows := [][]interface{}{
-		{"Cluster Name", "OpenShift Version", "Ready Nodes", "Total Nodes", "Ingress Operator Status", "Operator Status"}, // Header
+		{"Cluster Name", "OpenShift Version", "Cloud", "API url", "Ready Nodes", "Total Nodes", "Ingress Operator Status", "Operator Status"}, // Header
 	}
 
 	for _, cluster := range clusterData.Body.Clusters {
@@ -98,6 +104,8 @@ func main() {
 		row := []interface{}{
 			cluster.ClusterName,
 			cluster.OCPVersion,
+			cluster.Configuration.Annotations.Cloud,
+			cluster.Configuration.APIURL,
 			fmt.Sprintf("%d", cluster.NodeSummary.Ready),
 			fmt.Sprintf("%d", cluster.NodeSummary.Total),
 			ingressStatus,
