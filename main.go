@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"golang.org/x/oauth2/google"
@@ -22,33 +23,8 @@ type LoginResponse struct {
 type StatusResponse struct {
 	Status string `json:"status"`
 	Body   struct {
-		Clusters map[string]Cluster `json:"clusters"`
+		Clusters map[string]interface{} `json:"clusters"`
 	} `json:"body"`
-}
-
-type Cluster struct {
-	ClusterName    string                    `json:"cluster_name"`
-	OCPVersion     string                    `json:"ocp_version"`
-	NodeSummary    NodeSummary               `json:"node_summary"`
-	OperatorStatus map[string]OperatorStatus `json:"operator_status"`
-	Configuration  struct {
-		APIURL      string `json:"api_url"`
-		Annotations struct {
-			Cloud string `json:"cloud"`
-		} `json:"annotations"`
-	} `json:"configuration"`
-}
-
-type NodeSummary struct {
-	Master int `json:"master"`
-	Worker int `json:"worker"`
-	Ready  int `json:"ready"`
-	Total  int `json:"total"`
-}
-
-type OperatorStatus struct {
-	Status  string `json:"status"`
-	Version string `json:"version"`
 }
 
 func main() {
@@ -76,40 +52,45 @@ func main() {
 		log.Fatalf("Failed to retrieve cluster status: %v", err)
 	}
 
-	// 4. Transform data for Google Sheets
-	log.Println("Parsing and preparing data for Google Sheets...")
-	rows := [][]interface{}{
-		{"Cluster Name", "OpenShift Version", "Cloud", "API url", "Ready Nodes", "Total Nodes", "Ingress Operator Status", "Operator Status"}, // Header
+	// 4. Dynamically flatten and prepare data for Google Sheets
+	log.Println("Flattening data and generating dynamic header...")
+
+	// Use a map to collect all unique keys from all clusters
+	headerMap := make(map[string]bool)
+	var flattenedClusters []map[string]string
+
+	for _, clusterInterface := range clusterData.Body.Clusters {
+		flattenedData := flatten(clusterInterface, "")
+		for key := range flattenedData {
+			headerMap[key] = true
+		}
+		flattenedClusters = append(flattenedClusters, flattenedData)
 	}
 
-	for _, cluster := range clusterData.Body.Clusters {
-		ingressStatus := "N/A"
-		if op, ok := cluster.OperatorStatus["ingress"]; ok {
-			ingressStatus = op.Status
-		}
+	// Convert the header map to a sorted slice of strings
+	var header []string
+	for key := range headerMap {
+		header = append(header, key)
+	}
+	sort.Strings(header)
 
-		var overallOperatorStatus string
-		healthyOperators := 0
-		for _, status := range cluster.OperatorStatus {
-			if status.Status == "Healthy" {
-				healthyOperators++
+	// The shorter fix: manually convert the header to []interface{}
+	headerRow := make([]interface{}, len(header))
+	for i, v := range header {
+		headerRow[i] = v
+	}
+
+	rows := [][]interface{}{headerRow}
+
+	for _, clusterData := range flattenedClusters {
+		var row []interface{}
+		for _, key := range header {
+			value, ok := clusterData[key]
+			if !ok {
+				row = append(row, "") // Append an empty string for missing values
+			} else {
+				row = append(row, value)
 			}
-		}
-		if healthyOperators == len(cluster.OperatorStatus) {
-			overallOperatorStatus = "Healthy"
-		} else {
-			overallOperatorStatus = fmt.Sprintf("Unhealthy (%d/%d)", healthyOperators, len(cluster.OperatorStatus))
-		}
-
-		row := []interface{}{
-			cluster.ClusterName,
-			cluster.OCPVersion,
-			cluster.Configuration.Annotations.Cloud,
-			cluster.Configuration.APIURL,
-			fmt.Sprintf("%d", cluster.NodeSummary.Ready),
-			fmt.Sprintf("%d", cluster.NodeSummary.Total),
-			ingressStatus,
-			overallOperatorStatus,
 		}
 		rows = append(rows, row)
 	}
@@ -149,6 +130,37 @@ func main() {
 	}
 
 	log.Println("Successfully updated Google Sheet!")
+}
+
+// flatten recursively flattens a nested map and collects all key-value pairs.
+func flatten(jsonMap interface{}, prefix string) map[string]string {
+	flattened := make(map[string]string)
+
+	switch m := jsonMap.(type) {
+	case map[string]interface{}:
+		for key, value := range m {
+			newPrefix := key
+			if prefix != "" {
+				newPrefix = prefix + "_" + key
+			}
+			switch nestedValue := value.(type) {
+			case map[string]interface{}:
+				nestedFlattened := flatten(nestedValue, newPrefix)
+				for k, v := range nestedFlattened {
+					flattened[k] = v
+				}
+			case string:
+				flattened[newPrefix] = nestedValue
+			case float64:
+				flattened[newPrefix] = fmt.Sprintf("%v", nestedValue)
+			case bool:
+				flattened[newPrefix] = fmt.Sprintf("%t", nestedValue)
+			default:
+				flattened[newPrefix] = fmt.Sprintf("%v", nestedValue)
+			}
+		}
+	}
+	return flattened
 }
 
 func getAccessToken(apiRoute, adminToken string) (string, error) {
