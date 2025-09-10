@@ -55,26 +55,27 @@ func main() {
 	// 4. Dynamically flatten and prepare data for Google Sheets
 	log.Println("Flattening data and generating dynamic header...")
 
-	// Use a map to collect all unique keys from all clusters
 	headerMap := make(map[string]bool)
 	var flattenedClusters []map[string]string
 
-	for _, clusterInterface := range clusterData.Body.Clusters {
+	for clusterName, clusterInterface := range clusterData.Body.Clusters {
 		flattenedData := flatten(clusterInterface, "")
+
+		// Add the cluster name as a field
+		flattenedData["cluster_name"] = clusterName
+
 		for key := range flattenedData {
 			headerMap[key] = true
 		}
 		flattenedClusters = append(flattenedClusters, flattenedData)
 	}
 
-	// Convert the header map to a sorted slice of strings
 	var header []string
 	for key := range headerMap {
 		header = append(header, key)
 	}
 	sort.Strings(header)
 
-	// The shorter fix: manually convert the header to []interface{}
 	headerRow := make([]interface{}, len(header))
 	for i, v := range header {
 		headerRow[i] = v
@@ -87,7 +88,7 @@ func main() {
 		for _, key := range header {
 			value, ok := clusterData[key]
 			if !ok {
-				row = append(row, "") // Append an empty string for missing values
+				row = append(row, "")
 			} else {
 				row = append(row, value)
 			}
@@ -119,12 +120,12 @@ func main() {
 		Values: rows,
 	}
 
-	_, err = srv.Spreadsheets.Values.Clear(spreadsheetID, "A1:Z", &sheets.ClearValuesRequest{}).Do()
+	_, err = srv.Spreadsheets.Values.Clear(spreadsheetID, "full_data!A1:Z", &sheets.ClearValuesRequest{}).Do()
 	if err != nil {
 		log.Fatalf("Failed to clear sheet: %v", err)
 	}
 
-	_, err = srv.Spreadsheets.Values.Update(spreadsheetID, "A1", valueRange).ValueInputOption("USER_ENTERED").Do()
+	_, err = srv.Spreadsheets.Values.Update(spreadsheetID, "full_data!A1", valueRange).ValueInputOption("USER_ENTERED").Do()
 	if err != nil {
 		log.Fatalf("Failed to update sheet: %v", err)
 	}
@@ -148,6 +149,13 @@ func flatten(jsonMap interface{}, prefix string) map[string]string {
 				nestedFlattened := flatten(nestedValue, newPrefix)
 				for k, v := range nestedFlattened {
 					flattened[k] = v
+				}
+			case []interface{}:
+				if len(nestedValue) > 0 {
+					nestedFlattened := flatten(nestedValue[0], newPrefix)
+					for k, v := range nestedFlattened {
+						flattened[k] = v
+					}
 				}
 			case string:
 				flattened[newPrefix] = nestedValue
